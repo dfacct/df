@@ -10,6 +10,52 @@ from umeyama import umeyama
 
 from face_alignment import FaceAlignment, LandmarksType
 
+def faces_find(image, try_rotated):
+    faces = FACE_ALIGNMENT.get_landmarks( image )
+    if faces is None and try_rotated:
+        angles = [90, 180, 270]
+        for i,angle in enumerate(angles):
+            image = image_rotate( image, -angle )
+            faces = FACE_ALIGNMENT.get_landmarks( image )
+            if faces and len( faces ) > 0:
+                print( "Found face(s) with", str(angle), "degree rotation" )
+                faces = faces_unrotate( faces, image, angle )
+                break
+    return faces
+
+def faces_unrotate(faces, image, angle):
+    for i,points in enumerate(faces):
+        for ii,pointset in enumerate(points):
+            if angle==90:
+                faces[i][ii] = [pointset[1],image.shape[1]-pointset[0]]
+            elif angle==180:
+                faces[i][ii] = [image.shape[1]-pointset[0],image.shape[0]-pointset[1]]
+            elif angle==270:
+                faces[i][ii] = [image.shape[0]-pointset[1],pointset[0]]
+    return faces
+
+def image_resize(image, max_size):
+    height, width = image.shape[:2]
+    if max_size < height or max_size < width:
+        scale = max_size / float(height)
+        if max_size/float(width) < scale:
+            scale = max_size / float(width)
+        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    return image
+
+def image_rotate(image, angle):
+    height, width = image.shape[:2]
+    image_center = (width/2, height/2)
+    rotation_matrix = cv2.getRotationMatrix2D(image_center, angle, 1.)
+    abs_cos = abs(rotation_matrix[0,0])
+    abs_sin = abs(rotation_matrix[0,1])
+    bound_w = int(height * abs_sin + width * abs_cos)
+    bound_h = int(height * abs_cos + width * abs_sin)
+    rotation_matrix[0, 2] += bound_w/2 - image_center[0]
+    rotation_matrix[1, 2] += bound_h/2 - image_center[1]
+    rotated_image = cv2.warpAffine(image, rotation_matrix, (bound_w, bound_h))
+    return rotated_image
+
 def monkey_patch_face_detector(_):
     detector = dlib.get_frontal_face_detector()
     class Rect(object):
@@ -19,7 +65,6 @@ def monkey_patch_face_detector(_):
         return [ Rect(x) for x in detector(*args) ]
     return detect
 
-dlib.cnn_face_detection_model_v1 = monkey_patch_face_detector
 FACE_ALIGNMENT = FaceAlignment( LandmarksType._2D, enable_cuda=True, flip_input=False )
 
 mean_face_x = numpy.array([
@@ -49,6 +94,10 @@ def transform( image, mat, size, padding=0 ):
     return cv2.warpAffine( image, mat, ( new_size, new_size ) )
 
 def main( args ):
+
+    if args.use_gpu is False:
+        dlib.cnn_face_detection_model_v1 = monkey_patch_face_detector
+
     input_dir = Path( args.input_dir )
     assert input_dir.is_dir()
 
@@ -64,28 +113,31 @@ def main( args ):
     elif args.startFrame>0:
       input_files=input_files[args.startFrame:]
 
-
     assert len( input_files ) > 0, "Can't find input files"
 
     def iter_face_alignments():
         for fn in tqdm( input_files ):
             
             image = cv2.imread( str(fn) )
+            scale = 1
 
             if image is None:
               tqdm.write( "Can't read image file: ", fn )
               continue
 
-            #ar=image.shape[1]/image.shape[0]
-            #image = cv2.resize(image, (int(800*ar),800),cv2.INTER_CUBIC)
-
-            faces = FACE_ALIGNMENT.get_landmarks( image.copy() )
-
+            if args.fast_mode:
+                image_sm = image_resize(image, args.fast_mode_size)
+                scale = image_sm.shape[1]/image.shape[1]
+                faces = faces_find( image_sm.copy(), args.try_rotated )
+            else:
+                faces = faces_find( image.copy(), args.try_rotated )
+						
             if faces is None: continue
             if len(faces) == 0: continue
             if args.only_one_face and len(faces) != 1: continue
 
             for i,points in enumerate(faces):
+                points = points/scale
                 alignment = umeyama( points[17:], landmarks_2D, True )[0:2]
                 aligned_image = transform( image, alignment, 160, 48 )
 
@@ -121,5 +173,16 @@ if __name__ == '__main__':
     parser.add_argument( "--maxFrames", type=int, default='0' )
     
     parser.add_argument( "--file-type", type=str, default='jpg' )
+
+    parser.set_defaults( fast_mode=False )
+    parser.add_argument( '--fast-mode' , dest='fast_mode', action='store_true' )
+
+    parser.add_argument( "--fast-mode-size", type=int, default='800' )
+
+    parser.set_defaults( try_rotated=False )
+    parser.add_argument( '--try-rotated' , dest='try_rotated', action='store_true' )
+
+    parser.set_defaults( use_gpu=False )
+    parser.add_argument( '--use-gpu' , dest='use_gpu', action='store_true' )
 
     main( parser.parse_args() )
