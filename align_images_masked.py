@@ -15,11 +15,11 @@ def faces_find(image, try_rotated):
     if faces is None and try_rotated:
         angles = [90, 180, 270]
         for i,angle in enumerate(angles):
-            image = image_rotate( image, -angle )
-            faces = FACE_ALIGNMENT.get_landmarks( image )
+            image_rot = image_rotate( image, angle )
+            faces = FACE_ALIGNMENT.get_landmarks( image_rot )
             if faces and len( faces ) > 0:
                 print( "Found face(s) with", str(angle), "degree rotation" )
-                faces = faces_unrotate( faces, image, angle )
+                faces = faces_unrotate( faces, image_rot, angle )
                 break
     return faces
 
@@ -27,11 +27,11 @@ def faces_unrotate(faces, image, angle):
     for i,points in enumerate(faces):
         for ii,pointset in enumerate(points):
             if angle==90:
-                faces[i][ii] = [pointset[1],image.shape[1]-pointset[0]]
+                faces[i][ii] = [image.shape[0]-pointset[1],pointset[0]]
             elif angle==180:
                 faces[i][ii] = [image.shape[1]-pointset[0],image.shape[0]-pointset[1]]
             elif angle==270:
-                faces[i][ii] = [image.shape[0]-pointset[1],pointset[0]]
+                faces[i][ii] = [pointset[1],image.shape[1]-pointset[0]]
     return faces
 
 def image_resize(image, max_size):
@@ -131,7 +131,7 @@ def main( args ):
                 faces = faces_find( image_sm.copy(), args.try_rotated )
             else:
                 faces = faces_find( image.copy(), args.try_rotated )
-						
+                        
             if faces is None: continue
             if len(faces) == 0: continue
             if args.only_one_face and len(faces) != 1: continue
